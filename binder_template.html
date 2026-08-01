@@ -225,7 +225,11 @@ details.set[open] > summary .set-name{color:#fff}
 .item-name{font-size:13px;color:var(--paper)}
 .item-set{font:400 11px "JetBrains Mono",monospace;color:var(--dim);margin-top:2px}
 .item-qty{
-  font:700 11px "JetBrains Mono",monospace;color:var(--foil-c);flex:none;
+  font:700 11px "JetBrains Mono",monospace;color:var(--mute);flex:none;
+}
+.item-price{
+  font:700 12px "JetBrains Mono",monospace;color:var(--foil-c);flex:none;
+  min-width:72px;text-align:right;
 }
 details.set.inv > summary .set-name{color:var(--foil-c)}
 
@@ -273,6 +277,7 @@ footer a{color:var(--mute)}
       <label class="chk"><input type="checkbox" id="only"> Missing only</label>
       <label class="chk"><input type="checkbox" id="art" checked> Card art</label>
       <label class="chk" id="price-wrap"><input type="checkbox" id="price"> Prices</label>
+      <label class="chk" id="jp-wrap"><input type="checkbox" id="jp" checked> Japanese sets</label>
     </div>
   </header>
   <main id="out"></main>
@@ -285,7 +290,13 @@ footer a{color:var(--mute)}
 <script>
 const DATA = /*__DATA__*/null;
 const out = document.getElementById('out');
-let mode = 'num', onlyMissing = false, query = '', showArt = true, showPrice = false;
+let mode = 'num', onlyMissing = false, query = '', showArt = true, showPrice = false,
+    showJP = true;
+
+// Sets currently in scope. Japanese printings can be hidden - they're a
+// different collecting goal and TCGdex carries no prices for most of them.
+const visibleSets = () =>
+  showJP ? DATA.sets : DATA.sets.filter(s => !String(s.tcgdex).startsWith('ja/'));
 const opened = new Set();   // sets the reader has expanded, kept across redraws
 const START_SPLIT = true;   // open on the paired base/reverse view
 
@@ -330,18 +341,32 @@ function priceOf(c, reverse){
 }
 
 function money(set){
-  let held = 0, need = 0;
-  const add = (c, rev, has) => { const v = priceOf(c, rev); if (has) held += v; else need += v; };
+  // Track how many of the missing cards actually carry a price: a set with no
+  // pricing at all sums to zero, which must not be read as "nothing to buy".
+  let held = 0, need = 0, missing = 0, priced = 0;
+  const add = (c, rev, has) => {
+    const v = priceOf(c, rev);
+    if (has) { held += v; return; }
+    missing++;
+    if (v) { need += v; priced++; }
+  };
   if (mode === 'mas') {
     const tracks = tracksFor(set);
     if (tracks.length) {
       for (const t of tracks)
         for (const c of t.cards) add(c, t.key === 'rev', heldIn(c, t));
-      return {held, need};
+      return {held, need, missing, priced};
     }
   }
   for (const c of set.cards) add(c, false, c.qty > 0);
-  return {held, need};
+  return {held, need, missing, priced};
+}
+
+function costLabel(set){
+  const m = money(set);
+  if (!m.missing) return 'complete';
+  if (!m.priced) return 'no price data';
+  return (m.priced < m.missing ? 'from ' : '') + fmt(m.need) + ' to complete';
 }
 
 const fmt = v => DATA.symbol + (v >= 100
@@ -596,6 +621,12 @@ function shelf(items){
       q.className = 'item-qty'; q.textContent = '\u00d7' + it.qty;
       row.append(q);
     }
+    if (showPrice && it.p) {
+      const pr = document.createElement('span');
+      pr.className = 'item-price';
+      pr.textContent = fmt(it.p * it.qty);
+      row.append(pr);
+    }
     el.append(row); n++;
   }
   return n ? el : null;
@@ -605,6 +636,7 @@ function inventorySection(label, items, note){
   const body = shelf(items);
   if (!body) return null;
   const count = items.reduce((t,i) => t + i.qty, 0);
+  const worth = items.reduce((t,i) => t + (i.p || 0) * i.qty, 0);
   const d = document.createElement('details');
   d.className = 'set inv';
   d.innerHTML =
@@ -612,7 +644,15 @@ function inventorySection(label, items, note){
     '<div class="tally">' + count + '<small>item' + (count === 1 ? '' : 's') +
     '</small></div></summary>';
   d.querySelector('.set-name').textContent = label;
-  d.querySelector('.set-meta').textContent = note;
+  const meta = d.querySelector('.set-meta');
+  meta.textContent = note;
+  if (showPrice && worth) {
+    meta.append(document.createTextNode('  \u00b7  '));
+    const c = document.createElement('span');
+    c.className = 'cost';
+    c.textContent = fmt(worth) + ' held';
+    meta.append(c);
+  }
   d.addEventListener('toggle', () => {
     if (d.open) { opened.add(label); if (!d.dataset.built) { d.dataset.built='1'; d.append(shelf(items)); } }
     else opened.delete(label);
@@ -647,17 +687,18 @@ function pagesPerView(){
 
 function renderBinder(){
   out.textContent = '';
-  if (!binder.set || !DATA.sets.some(s => s.label === binder.set)) {
-    binder.set = DATA.sets[0] && DATA.sets[0].label;
+  const pool = visibleSets();
+  if (!binder.set || !pool.some(s => s.label === binder.set)) {
+    binder.set = pool[0] && pool[0].label;
   }
-  const set = DATA.sets.find(s => s.label === binder.set);
+  const set = pool.find(s => s.label === binder.set);
   if (!set) { out.innerHTML = '<div class="bempty">No sets to show.</div>'; return; }
 
   const ctl = document.createElement('div');
   ctl.className = 'bctl';
 
   const sel = document.createElement('select');
-  for (const s of DATA.sets) {
+  for (const s of pool) {
     const t = tally(s);
     const o = document.createElement('option');
     o.value = s.label;
@@ -761,7 +802,7 @@ function render(){
   if (mode === 'binder') return renderBinder();
   out.textContent = '';
   let shown = 0;
-  for (const set of DATA.sets) {
+  for (const set of visibleSets()) {
     const hit = set.label.toLowerCase().includes(query);
     if (query && !hit && !set.cards.some(matches)) continue;
     shown++;
@@ -778,11 +819,10 @@ function render(){
     const meta = d.querySelector('.set-meta');
     meta.textContent = set.tcgdex + (set.released ? '  \u00b7  ' + set.released : '');
     if (showPrice && DATA.currency) {
-      const m = money(set);
       meta.append(document.createTextNode('  \u00b7  '));
       const c = document.createElement('span');
       c.className = 'cost';
-      c.textContent = m.need > 0 ? fmt(m.need) + ' to complete' : 'complete';
+      c.textContent = costLabel(set);
       meta.append(c);
     }
 
@@ -815,11 +855,11 @@ function render(){
   }
   if (!shown) out.innerHTML = '<div class="empty">Nothing matches that search.</div>';
 
-  const all = DATA.sets.map(tally)
+  const all = visibleSets().map(tally)
     .reduce((a,b) => ({have:a.have+b.have, total:a.total+b.total}), {have:0,total:0});
   let line = 'Collection checklist \u2014 ' + all.have + ' of ' + all.total + ' held';
   if (showPrice && DATA.currency) {
-    const m = DATA.sets.map(money)
+    const m = visibleSets().map(money)
       .reduce((a,b) => ({held:a.held+b.held, need:a.need+b.need}), {held:0,need:0});
     line += '  \u00b7  ' + fmt(m.held) + ' held, ' + fmt(m.need) + ' to complete';
   }
@@ -838,6 +878,11 @@ document.getElementById('m-mas').onclick = () => setMode('mas');
 document.getElementById('m-bin').onclick = () => setMode('binder');
 document.getElementById('only').onchange = e => { onlyMissing = e.target.checked; render(); };
 document.getElementById('art').onchange = e => { showArt = e.target.checked; render(); };
+if (DATA.sets.some(s => String(s.tcgdex).startsWith('ja/'))) {
+  document.getElementById('jp').onchange = e => { showJP = e.target.checked; render(); };
+} else {
+  document.getElementById('jp-wrap').remove();
+}
 if (DATA.currency) {
   document.getElementById('price').onchange = e => { showPrice = e.target.checked; render(); };
 } else {
@@ -850,9 +895,11 @@ document.getElementById('q').oninput = e => {
 };
 if (START_SPLIT && DATA.variantData) setMode('mas'); else if (DATA.currency) {
   document.getElementById('price-note').textContent =
-    'Prices are Cardmarket trend values in EUR, converted to ' + DATA.currency +
-    ' at the ECB rate of ' + DATA.fxDate + '. Indicative only, and fixed at the ' +
-    'time this page was built (' + DATA.built + ').';
+    'Card prices are Cardmarket trend values in EUR, converted to ' + DATA.currency +
+    ' at the ECB rate of ' + DATA.fxDate + '. Sealed product and cards with no ' +
+    'checklist use CollectR\u2019s own valuation instead, since TCGdex holds no ' +
+    'sealed data. Indicative only, and fixed when this page was built (' +
+    DATA.built + ').';
 }
 render();
 </script>
