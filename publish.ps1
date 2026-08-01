@@ -40,7 +40,7 @@ if ($LASTEXITCODE -ne 0) { throw "build failed" }
 Write-Host "==> publishing" -ForegroundColor Cyan
 Push-Location $Repo
 try {
-    git add index.html
+    git add -A
     git diff --cached --quiet
     if ($LASTEXITCODE -eq 0) {
         Write-Host "no changes since last publish"

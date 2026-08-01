@@ -88,13 +88,34 @@ personal details, but it is a public inventory of what you own.
 | `--first-ed` | Count 1st Edition as a required variant |
 | `--no-variants` | Skip per-card detail lookups; disables the split view |
 
-## Adding sets
+## New sets
 
-The script prints any CollectR set name it doesn't recognise. Add it to
-`SET_MAP` in `build_binder.py` as `"CollectR name": ("en", "tcgdex-id")`.
-Set IDs come from `https://api.tcgdex.net/v2/en/sets` (or `/ja/sets`).
+Usually nothing to do. The build caches TCGdex's full set index (two API
+calls, ~400 sets) and resolves CollectR set names against it by exact name,
+printing what it matched so you can sanity-check.
+
+Only names that can't match on their own need a hand: promo sets TCGdex files
+under a different name, and Japanese printings it lists under Japanese names.
+Those go in `SET_OVERRIDES` as `"CollectR name": ("en", "tcgdex-id")`, with
+IDs from `https://api.tcgdex.net/v2/en/sets` (or `/ja/sets`). The build prints
+the closest names it knows when it can't match one.
 
 Sets with no checklist to diff against go in `UNTRACKED` instead.
+
+Matching is exact, never fuzzy — a wrong set silently attached to your cards
+is worse than an unmatched one you get told about.
+
+## Refreshing stale data
+
+`.tcgdex_cache/` never expires. If a set gains cards or variant data upstream
+you won't see it until you clear it:
+
+```
+python build_binder.py collectr-export.csv -o index.html --refresh
+```
+
+That re-fetches everything and takes a few minutes. Worth doing every few
+months, or when a reconstructed reverse run gets flagged on the page.
 
 ## Known data gaps
 

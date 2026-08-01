@@ -12,6 +12,7 @@ appears in the CollectR CSV, mapped to (language, tcgdex_set_id).
 """
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -23,32 +24,19 @@ from concurrent.futures import ThreadPoolExecutor
 API = "https://api.tcgdex.net/v2"
 CACHE = ".tcgdex_cache"
 
-# CollectR set name -> (tcgdex language, tcgdex set id)
-SET_MAP = {
-    "Base Set (Unlimited)": ("en", "base1"),
-    "Base Set 2": ("en", "base4"),
-    "Jungle": ("en", "base2"),
-    "Fossil": ("en", "base3"),
-    "Team Rocket": ("en", "base5"),
-    "Gym Heroes": ("en", "gym1"),
-    "Gym Challenge": ("en", "gym2"),
-    "Neo Genesis": ("en", "neo1"),
-    "Neo Discovery": ("en", "neo2"),
+# Overrides for CollectR set names that don't match a TCGdex name exactly, or
+# that match the wrong one. Everything else resolves automatically against the
+# cached set index, so a newly released set usually needs nothing added here.
+SET_OVERRIDES = {
+    # No TCGdex set carries these names, so they can't resolve on their own.
+    "WoTC Promo": ("en", "basep"),            # Wizards Black Star Promos
+    "Scarlet & Violet Promo": ("en", "svp"),  # SVP Black Star Promos
+    "Mega Evolution Promos": ("en", "mep"),   # MEP Black Star Promos
+    # Japanese printings: TCGdex lists these under Japanese names, so the
+    # English-looking CollectR label never matches.
+    "Pokemon 151": ("ja", "SV2a"),
     "Neo Genesis (Japanese)": ("ja", "neo1"),
     "Neo Discovery (Japanese)": ("ja", "neo2"),
-    "WoTC Promo": ("en", "basep"),
-    "Surging Sparks": ("en", "sv08"),
-    "Destined Rivals": ("en", "sv10"),
-    "Black Bolt": ("en", "sv10.5b"),
-    "White Flare": ("en", "sv10.5w"),
-    "Scarlet & Violet Promo": ("en", "svp"),
-    "Mega Evolution": ("en", "me01"),
-    "Phantasmal Flames": ("en", "me02"),
-    "Ascended Heroes": ("en", "me02.5"),
-    "Perfect Order": ("en", "me03"),
-    "Chaos Rising": ("en", "me04"),
-    "Mega Evolution Promos": ("en", "mep"),
-    "Pokemon 151": ("ja", "SV2a"),
 }
 
 # Sets CollectR reports that have no checklist to diff against. Sealed product
@@ -89,6 +77,12 @@ REVERSE_RARITIES = {"Common", "Uncommon", "Rare"}
 # Reverse holos start with Legendary Collection (May 2002); nothing earlier has
 # them, and Japanese sets don't print a parallel reverse run at all.
 REVERSE_ERA = "2002-05-01"
+
+
+def norm_name(v):
+    """'Base Set (Unlimited)' -> 'base set';  'Scarlet & Violet' -> 'scarlet violet'."""
+    t = re.sub(r"\(.*?\)", " ", str(v).lower())
+    return " ".join(re.sub(r"[^a-z0-9 ]", " ", t).split())
 
 
 def fetch(path):
@@ -167,11 +161,43 @@ def norm_num(v):
     return f"{m.group(1)}{m.group(2)}" if m else s
 
 
-def read_collection(path):
-    """CSV -> owned dict, unmapped set counts, and rows with no checklist to diff."""
+def set_index():
+    """Every TCGdex set, keyed by normalised name. Two API calls, then cached."""
+    idx = {"en": {}, "ja": {}}
+    for lang in ("en", "ja"):
+        for st in fetch(f"{lang}/sets") or []:
+            idx[lang].setdefault(norm_name(st["name"]), (lang, st["id"], st["name"]))
+    return idx
+
+
+def resolve_sets(labels, idx):
+    """CollectR set names -> (lang, tcgdex id). Overrides win; then exact name."""
+    resolved, auto, unknown = {}, [], []
+    for lab in sorted(labels):
+        if lab in UNTRACKED:
+            continue
+        if lab in SET_OVERRIDES:
+            resolved[lab] = SET_OVERRIDES[lab]
+            continue
+        # CollectR flags Japanese printings in the set name itself.
+        order = ("ja", "en") if re.search(r"japanese|\bjp\b", lab, re.I) else ("en", "ja")
+        hit = next((idx[l].get(norm_name(lab)) for l in order if idx[l].get(norm_name(lab))), None)
+        if hit:
+            resolved[lab] = (hit[0], hit[1])
+            auto.append((lab, hit[0], hit[1], hit[2]))
+        else:
+            near = difflib.get_close_matches(
+                norm_name(lab), list(idx["en"]) + list(idx["ja"]), 3, 0.7
+            )
+            unknown.append((lab, near))
+    return resolved, auto, unknown
+
+
+def read_collection(path, resolved):
+    """CSV -> owned dict and rows with no checklist to diff against."""
     import csv
 
-    owned, unknown_sets, loose = {}, {}, []
+    owned, loose = {}, []
     with open(path, newline="", encoding="utf-8-sig") as fh:
         for row in csv.DictReader(fh):
             cset = (row.get("set") or "").strip()
@@ -182,9 +208,7 @@ def read_collection(path):
 
             # Sealed product, CollectR's catch-all bucket, and sets TCGdex
             # doesn't carry: no checklist to diff, but still tradeable.
-            if not num or cset in UNTRACKED or cset not in SET_MAP:
-                if num and cset not in UNTRACKED and cset not in SET_MAP:
-                    unknown_sets[cset] = unknown_sets.get(cset, 0) + 1
+            if not num or cset not in resolved:
                 loose.append(
                     {
                         "set": cset,
@@ -201,16 +225,16 @@ def read_collection(path):
             )
             e["qty"] += qty
             e["finishes"][key] = e["finishes"].get(key, 0) + qty
-    return owned, unknown_sets, loose
+    return owned, loose
 
 
-def build_sets(owned, want_variants, keep_variants):
+def build_sets(owned, resolved, want_variants, keep_variants):
     """Assemble per-set checklists, marking which cards and variants are owned."""
     used = sorted({c for c, _ in owned})
     out = []
 
     for cset in used:
-        lang, sid = SET_MAP[cset]
+        lang, sid = resolved[cset]
         meta = fetch(f"{lang}/sets/{sid}")
         if not meta:
             print(f"  ! could not load {cset} ({lang}/{sid})", file=sys.stderr)
@@ -317,6 +341,12 @@ def main():
         help="skip per-card detail lookups (faster, disables master-set mode)",
     )
     ap.add_argument(
+        "--refresh",
+        action="store_true",
+        help="ignore the cache and re-fetch everything (picks up newly added "
+        "sets, cards and variant data upstream)",
+    )
+    ap.add_argument(
         "--sets",
         default="",
         help="comma-separated CollectR set names to include (default: all)",
@@ -342,16 +372,34 @@ def main():
         v for v in ALL_VARIANTS if v != "firstEdition"
     )
 
-    owned, unknown, loose = read_collection(args.csv)
-    print(f"{len(owned)} distinct cards across {len({c for c,_ in owned})} sets")
+    if args.refresh and os.path.isdir(CACHE):
+        import shutil
+
+        shutil.rmtree(CACHE)
+        print("cache cleared")
+
+    import csv as _csv
+
+    with open(args.csv, newline="", encoding="utf-8-sig") as fh:
+        labels = {(r.get("set") or "").strip() for r in _csv.DictReader(fh)}
+    resolved, auto, unknown = resolve_sets(labels, set_index())
+
+    if auto:
+        print("matched automatically:")
+        for lab, lang, sid, name in auto:
+            print(f"  {lab}  ->  {lang}/{sid}  ({name})")
+    if unknown:
+        print("\nNo TCGdex match — add to SET_OVERRIDES, or UNTRACKED to skip:")
+        for lab, near in unknown:
+            hint = f"   closest: {', '.join(near)}" if near else ""
+            print(f"  {lab!r}{hint}")
+
+    owned, loose = read_collection(args.csv, resolved)
+    print(f"\n{len(owned)} distinct cards across {len({c for c,_ in owned})} sets")
     if loose:
         print(f"{len(loose)} rows with no checklist (sealed, promos, untracked sets)")
-    if unknown:
-        print("\nUnmapped sets — add them to SET_MAP to include them:")
-        for k, v in sorted(unknown.items(), key=lambda x: -x[1]):
-            print(f"  {v:5d}  {k}")
 
-    sets = build_sets(owned, not args.no_variants, keep)
+    sets = build_sets(owned, resolved, not args.no_variants, keep)
 
     if args.sets:
         wanted = {x.strip().lower() for x in args.sets.split(",") if x.strip()}
