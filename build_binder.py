@@ -81,6 +81,20 @@ REVERSE_ERA = "2002-05-01"
 
 
 CURRENCIES = {"GBP": "\u00a3", "EUR": "\u20ac", "USD": "$"}
+SYMBOL_TO_CODE = {"\u00a3": "GBP", "\u20ac": "EUR", "$": "USD", "\u00a5": "JPY"}
+
+
+def parse_money(v):
+    """'£314.46' -> ('GBP', 314.46). Returns (None, None) if unparseable."""
+    t = str(v or "").strip()
+    m = re.match(r"^\s*([\u00a3\u20ac$\u00a5]?)\s*([\d,]+\.?\d*)\s*$", t)
+    if not m:
+        return None, None
+    code = SYMBOL_TO_CODE.get(m.group(1))
+    try:
+        return code, float(m.group(2).replace(",", ""))
+    except ValueError:
+        return None, None
 
 
 def fx_rate(to):
@@ -267,7 +281,18 @@ def find_card(name, number, sizes):
     return cand[0] if len(cand) == 1 else None
 
 
-def build_loose(loose, sets, sizes, names):
+def convert(amount, frm, to):
+    """Convert between currencies via the ECB, or return as-is when they match."""
+    if amount is None or not frm:
+        return None
+    if frm == to:
+        return round(amount, 2)
+    d = fetch_url(f"https://api.frankfurter.dev/v1/latest?base={frm}&symbols={to}")
+    r = ((d or {}).get("rates") or {}).get(to)
+    return round(amount * r, 2) if r else None
+
+
+def build_loose(loose, sets, sizes, names, currency=None):
     """Sealed product, and cards from sets with no checklist to diff against.
 
     Neither can be 'missing' from anything, so these are shown as a plain
@@ -282,6 +307,12 @@ def build_loose(loose, sets, sizes, names):
             "qty": r["qty"],
             "logo": logos.get(r["set"]),
         }
+        # TCGdex has no sealed-product data at all, so CollectR's own valuation
+        # is the only price available for these.
+        if currency and r.get("amt") is not None:
+            v = convert(r["amt"], r["cur"], currency)
+            if v:
+                entry["p"] = v
         if r["n"]:
             entry["n"] = r["n"]
             entry["finish"] = r["finish"]
@@ -355,6 +386,7 @@ def read_collection(path, resolved):
             # Sealed product, CollectR's catch-all bucket, and sets TCGdex
             # doesn't carry: no checklist to diff, but still tradeable.
             if not num or cset not in resolved:
+                cur, amt = parse_money(row.get("value"))
                 loose.append(
                     {
                         "set": cset,
@@ -362,6 +394,8 @@ def read_collection(path, resolved):
                         "name": row["name"],
                         "finish": fin,
                         "qty": qty,
+                        "cur": cur,
+                        "amt": amt,
                     }
                 )
                 continue
@@ -589,7 +623,9 @@ def main():
         if not sets:
             sys.exit("nothing to build - check --sets against the names above")
 
-    sealed, orphan = build_loose(loose, sets, set_sizes(), set_names())
+    sealed, orphan = build_loose(
+        loose, sets, set_sizes(), set_names(), args.currency if rate else None
+    )
     if sealed:
         print(f"{sum(e['qty'] for e in sealed)} sealed items, "
               f"{sum(e['qty'] for e in orphan)} cards outside a tracked set")
