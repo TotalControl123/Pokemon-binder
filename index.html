@@ -54,6 +54,13 @@ h1 em{
 }
 .seg button[aria-pressed=true]{background:var(--edge);color:var(--paper)}
 .seg button:disabled{opacity:.35;cursor:not-allowed}
+.share{
+  appearance:none;background:var(--slab);border:1px solid var(--edge);
+  color:var(--mute);border-radius:9px;padding:9px 13px;cursor:pointer;
+  font:600 12px Inter,sans-serif;transition:color .2s,border-color .2s;
+}
+.share:hover{color:var(--paper);border-color:var(--mute)}
+.share.done{color:var(--ink);background:var(--foil-a);border-color:transparent}
 input[type=search]{
   flex:1;min-width:170px;background:var(--slab);border:1px solid var(--edge);
   color:var(--paper);border-radius:9px;padding:10px 13px;font:400 14px Inter,sans-serif;
@@ -278,6 +285,7 @@ footer a{color:var(--mute)}
       <label class="chk"><input type="checkbox" id="art" checked> Card art</label>
       <label class="chk" id="price-wrap"><input type="checkbox" id="price"> Prices</label>
       <label class="chk" id="jp-wrap"><input type="checkbox" id="jp" checked> Japanese sets</label>
+      <button id="share" class="share">Copy link</button>
     </div>
   </header>
   <main id="out"></main>
@@ -656,6 +664,7 @@ function inventorySection(label, items, note){
   d.addEventListener('toggle', () => {
     if (d.open) { opened.add(label); if (!d.dataset.built) { d.dataset.built='1'; d.append(shelf(items)); } }
     else opened.delete(label);
+    writeHash();
   });
   if (query || opened.has(label)) { d.open = true; d.dataset.built='1'; d.append(body); }
   return d;
@@ -682,7 +691,12 @@ function binderSeq(set){
 }
 
 function pagesPerView(){
-  return window.matchMedia('(min-width: 900px)').matches ? 2 : 1;
+  // Fall back to innerWidth where matchMedia is unavailable, rather than
+  // letting the whole binder view throw.
+  const wide = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(min-width: 900px)').matches
+    : (window.innerWidth || 1200) >= 900;
+  return wide ? 2 : 1;
 }
 
 function renderBinder(){
@@ -788,6 +802,7 @@ function renderBinder(){
   const eb = document.getElementById('eyebrow');
   const held = seq.filter(x => x.held).length;
   eb.textContent = set.label + ' \u2014 ' + held + ' of ' + seq.length + ' in this binder';
+  writeHash();
 }
 
 document.addEventListener('keydown', e => {
@@ -797,6 +812,93 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowRight') { binder.page += pagesPerView(); renderBinder(); }
 });
 window.addEventListener('resize', () => { if (mode === 'binder') renderBinder(); });
+
+// ---- shareable state ---------------------------------------------------
+// The whole point of this page is sending someone a specific view, so the
+// view lives in the URL: #mode=binder&set=Surging+Sparks&missing=1
+let hashLock = false;
+
+function writeHash(){
+  const p = new URLSearchParams();
+  if (mode !== 'num') p.set('mode', mode === 'mas' ? 'split' : 'binder');
+  if (onlyMissing) p.set('missing', '1');
+  if (!showArt) p.set('art', '0');
+  if (showPrice) p.set('price', '1');
+  if (!showJP) p.set('jp', '0');
+  if (query) p.set('q', query);
+  if (mode === 'binder') {
+    if (binder.set) p.set('set', binder.set);
+    if (binder.size !== 9) p.set('size', String(binder.size));
+    if (binder.track !== 'base') p.set('track', binder.track);
+    if (binder.page) p.set('page', String(binder.page + 1));
+  } else {
+    for (const label of opened) p.append('set', label);
+  }
+  const h = p.toString();
+  hashLock = true;
+  history.replaceState(null, '', h ? '#' + h : location.pathname + location.search);
+  setTimeout(() => { hashLock = false; }, 0);
+}
+
+function readHash(){
+  const p = new URLSearchParams(location.hash.replace(/^#/, ''));
+  if (!p.toString()) return false;
+  const m = p.get('mode');
+  mode = m === 'split' ? 'mas' : m === 'binder' ? 'binder' : 'num';
+  onlyMissing = p.get('missing') === '1';
+  showArt = p.get('art') !== '0';
+  showPrice = p.get('price') === '1';
+  showJP = p.get('jp') !== '0';
+  query = (p.get('q') || '').toLowerCase();
+
+  const sets = p.getAll('set');
+  opened.clear();
+  if (mode === 'binder') {
+    binder.set = sets[0] || null;
+    binder.size = p.get('size') === '4' ? 4 : 9;
+    const t = p.get('track');
+    binder.track = (t === 'rev' || t === 'both') ? t : 'base';
+    binder.page = Math.max(0, (parseInt(p.get('page'), 10) || 1) - 1);
+  } else {
+    for (const label of sets) opened.add(label);
+  }
+
+  // Reflect it in the controls so they don't contradict the view.
+  for (const [id, on] of [['only', onlyMissing], ['art', showArt],
+                          ['price', showPrice], ['jp', showJP]]) {
+    const el = document.getElementById(id);
+    if (el) el.checked = on;
+  }
+  const qi = document.getElementById('q');
+  if (qi) qi.value = p.get('q') || '';
+  for (const [id, key] of [['m-num','num'],['m-mas','mas'],['m-bin','binder']]) {
+    document.getElementById(id).setAttribute('aria-pressed', String(mode === key));
+  }
+  return true;
+}
+
+window.addEventListener('hashchange', () => {
+  if (hashLock) return;
+  readHash();
+  render();
+});
+
+document.getElementById('share').onclick = async e => {
+  const b = e.currentTarget;
+  try {
+    await navigator.clipboard.writeText(location.href);
+  } catch (_) {
+    // Clipboard API needs https or localhost; fall back to a selection.
+    const t = document.createElement('textarea');
+    t.value = location.href;
+    document.body.append(t); t.select();
+    try { document.execCommand('copy'); } catch (__) {}
+    t.remove();
+  }
+  b.textContent = 'Copied';
+  b.classList.add('done');
+  setTimeout(() => { b.textContent = 'Copy link'; b.classList.remove('done'); }, 1600);
+};
 
 function render(){
   if (mode === 'binder') return renderBinder();
@@ -833,6 +935,7 @@ function render(){
       } else {
         opened.delete(set.label);
       }
+      writeHash();
     });
     // Restore-on-redraw builds directly: the toggle event is async, so relying
     // on it here leaves a re-opened set empty.
@@ -864,6 +967,7 @@ function render(){
     line += '  \u00b7  ' + fmt(m.held) + ' held, ' + fmt(m.need) + ' to complete';
   }
   document.getElementById('eyebrow').textContent = line;
+  writeHash();
 }
 
 function setMode(m){
@@ -893,7 +997,8 @@ document.getElementById('q').oninput = e => {
   clearTimeout(timer);
   timer = setTimeout(() => { query = e.target.value.trim().toLowerCase(); render(); }, 160);
 };
-if (START_SPLIT && DATA.variantData) setMode('mas'); else if (DATA.currency) {
+// ---- startup ----
+if (DATA.currency) {
   document.getElementById('price-note').textContent =
     'Card prices are Cardmarket trend values in EUR, converted to ' + DATA.currency +
     ' at the ECB rate of ' + DATA.fxDate + '. Sealed product and cards with no ' +
@@ -901,7 +1006,15 @@ if (START_SPLIT && DATA.variantData) setMode('mas'); else if (DATA.currency) {
     'sealed data. Indicative only, and fixed when this page was built (' +
     DATA.built + ').';
 }
-render();
+
+// A shared link wins over the default view.
+if (readHash()) {
+  render();
+} else if (START_SPLIT && DATA.variantData) {
+  setMode('mas');
+} else {
+  render();
+}
 </script>
 </body>
 </html>

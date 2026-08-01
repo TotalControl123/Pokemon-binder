@@ -141,6 +141,29 @@ a collection gradually; a bad scrape shrinks it all at once.
 Nothing is published when the check fires. If you really did sell that much,
 re-run with `-Force`.
 
+## Sharing a specific view
+
+The current view lives in the URL, so **Copy link** gives you something that
+opens exactly what you're looking at - set, mode, filters and all. That's the
+link to send someone rather than the bare site address.
+
+```
+...github.io/Pokemon-binder/#mode=split&missing=1&set=Surging+Sparks
+```
+
+| Parameter | Values |
+| --- | --- |
+| `mode` | `split` (base/reverse paired) or `binder` (page view); omitted = by number |
+| `set` | set name; repeatable in grid mode, single in binder mode |
+| `missing` | `1` to show only what's missing |
+| `price` | `1` to show prices |
+| `art` | `0` to turn card art off (lighter on mobile data) |
+| `jp` | `0` to hide Japanese sets |
+| `q` | search text |
+| `size` | `4` for a 2x2 binder page; default is 3x3 |
+| `track` | `rev` or `both`; default `base` |
+| `page` | binder page number |
+
 ## New sets
 
 Usually nothing to do. The build caches TCGdex's full set index (two API
