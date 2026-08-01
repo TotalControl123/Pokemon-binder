@@ -154,6 +154,23 @@ details.set[open] > summary .set-name{color:#fff}
   border-radius:4px;padding:2px 5px;
 }
 
+/* ---- sealed / untracked inventory ---- */
+.shelf{padding:6px 0 26px;display:flex;flex-direction:column;gap:2px}
+.item{
+  display:flex;align-items:center;gap:12px;padding:11px 8px;
+  border-bottom:1px solid #1e2434;
+}
+.item:last-child{border-bottom:0}
+.item-logo{width:46px;height:26px;object-fit:contain;flex:none;opacity:.85}
+.item-logo.blank{background:var(--pocket);border-radius:4px}
+.item-main{flex:1;min-width:0}
+.item-name{font-size:13px;color:var(--paper)}
+.item-set{font:400 11px "JetBrains Mono",monospace;color:var(--dim);margin-top:2px}
+.item-qty{
+  font:700 11px "JetBrains Mono",monospace;color:var(--foil-c);flex:none;
+}
+details.set.inv > summary .set-name{color:var(--foil-c)}
+
 /* ---- variant tracks ---- */
 .track{
   display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 18px;padding:14px 2px 10px;
@@ -421,6 +438,66 @@ function noteOffline(){
   out.parentNode.insertBefore(b, out);
 }
 
+// Sealed product and cards from sets with no checklist: inventory, not a
+// checklist, so they get a plain list and sit out of the completion maths.
+function shelf(items){
+  const el = document.createElement('div');
+  el.className = 'shelf';
+  let n = 0;
+  for (const it of items) {
+    if (query && !(it.name + ' ' + it.set).toLowerCase().includes(query)) continue;
+    const row = document.createElement('div');
+    row.className = 'item';
+    if (it.logo && showArt) {
+      const img = new Image();
+      img.className = 'item-logo'; img.loading = 'lazy'; img.alt = '';
+      img.referrerPolicy = 'no-referrer'; img.src = it.logo + '.png';
+      row.append(img);
+    } else {
+      const b = document.createElement('span');
+      b.className = 'item-logo blank';
+      row.append(b);
+    }
+    const main = document.createElement('div');
+    main.className = 'item-main';
+    const nm = document.createElement('div');
+    nm.className = 'item-name'; nm.textContent = it.name;
+    const st = document.createElement('div');
+    st.className = 'item-set';
+    st.textContent = it.set + (it.n ? '  \u00b7  ' + it.n : '') +
+                     (it.finish ? '  \u00b7  ' + it.finish : '');
+    main.append(nm, st);
+    row.append(main);
+    if (it.qty > 1) {
+      const q = document.createElement('span');
+      q.className = 'item-qty'; q.textContent = '\u00d7' + it.qty;
+      row.append(q);
+    }
+    el.append(row); n++;
+  }
+  return n ? el : null;
+}
+
+function inventorySection(label, items, note){
+  const body = shelf(items);
+  if (!body) return null;
+  const count = items.reduce((t,i) => t + i.qty, 0);
+  const d = document.createElement('details');
+  d.className = 'set inv';
+  d.innerHTML =
+    '<summary><div><div class="set-name"></div><div class="set-meta"></div></div>' +
+    '<div class="tally">' + count + '<small>item' + (count === 1 ? '' : 's') +
+    '</small></div></summary>';
+  d.querySelector('.set-name').textContent = label;
+  d.querySelector('.set-meta').textContent = note;
+  d.addEventListener('toggle', () => {
+    if (d.open) { opened.add(label); if (!d.dataset.built) { d.dataset.built='1'; d.append(shelf(items)); } }
+    else opened.delete(label);
+  });
+  if (query || opened.has(label)) { d.open = true; d.dataset.built='1'; d.append(body); }
+  return d;
+}
+
 function render(){
   out.textContent = '';
   let shown = 0;
@@ -457,6 +534,16 @@ function render(){
       buildBody(d, set);
     }
     out.append(d);
+  }
+  // Nothing here can be missing, so keep it out of the want-list view.
+  if (!onlyMissing) {
+    const extra = [
+      inventorySection('Sealed', DATA.sealed || [],
+        'boxes, ETBs and collections \u2014 no checklist to complete'),
+      inventorySection('Outside a tracked set', DATA.orphan || [],
+        'promos and singles TCGdex has no set checklist for'),
+    ].filter(Boolean);
+    for (const e of extra) { out.append(e); shown++; }
   }
   if (!shown) out.innerHTML = '<div class="empty">Nothing matches that search.</div>';
 

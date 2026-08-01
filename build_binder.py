@@ -152,6 +152,32 @@ def embed_art(sets, only_owned=True):
     print(f"embedded {total/1048576:.1f} MB of art", file=sys.stderr)
 
 
+def build_loose(loose, sets):
+    """Sealed product, and cards from sets with no checklist to diff against.
+
+    Neither can be 'missing' from anything, so these are shown as a plain
+    inventory rather than a checklist - but nothing in the CSV goes unshown.
+    """
+    logos = {st["label"]: st.get("logo") for st in sets}
+    sealed, orphan = [], []
+    for r in loose:
+        entry = {
+            "name": r["name"],
+            "set": r["set"],
+            "qty": r["qty"],
+            "logo": logos.get(r["set"]),
+        }
+        if r["n"]:
+            entry["n"] = r["n"]
+            entry["finish"] = r["finish"]
+            orphan.append(entry)
+        else:
+            sealed.append(entry)
+    sealed.sort(key=lambda e: (e["set"], e["name"]))
+    orphan.sort(key=lambda e: (e["set"], e["name"]))
+    return sealed, orphan
+
+
 def norm_num(v):
     """'238/191' -> '238';  '051/049' -> '51';  '025' -> '25';  'TG01' -> 'tg1'."""
     if v is None:
@@ -410,6 +436,11 @@ def main():
         if not sets:
             sys.exit("nothing to build - check --sets against the names above")
 
+    sealed, orphan = build_loose(loose, sets)
+    if sealed:
+        print(f"{sum(e['qty'] for e in sealed)} sealed items, "
+              f"{sum(e['qty'] for e in orphan)} cards outside a tracked set")
+
     if args.embed_art:
         embed_art(sets, only_owned=not args.all_art)
 
@@ -420,6 +451,8 @@ def main():
     payload = {
         "owner": args.owner,
         "sets": sets,
+        "sealed": sealed,
+        "orphan": orphan,
         "variantData": not args.no_variants,
         "offlineArt": args.embed_art,
         "labels": VARIANT_LABEL,
