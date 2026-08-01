@@ -1,0 +1,16 @@
+# Normalise everything to LF in the repository; Git checks out whatever suits
+# the platform. Stops the "LF will be replaced by CRLF" warnings and the
+# phantom whole-file diffs that follow them.
+* text=auto
+
+# A shell script with CRLF endings fails on Linux and macOS with a confusing
+# "bad interpreter" error, so pin these to LF regardless of platform.
+*.sh text eol=lf
+
+# PowerShell is happy either way, but keep it native on Windows.
+*.ps1 text eol=crlf
+
+# Don't let Git touch these.
+*.png binary
+*.webp binary
+*.csv text eol=lf
