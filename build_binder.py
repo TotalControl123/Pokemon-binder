@@ -129,6 +129,58 @@ def card_price(card, rate):
     return [plain, foil] if (plain or foil) else None
 
 
+STATE_FILE = ".binder-state.json"
+SHRINK_LIMIT = 0.95  # refuse a build that lost more than 5% of the collection
+
+
+def check_size(counts, force):
+    """Refuse to publish an export that shrank sharply.
+
+    The scraper's usual failure is a scroll that stopped early: it produces a
+    perfectly valid CSV with cards silently missing, and a build that looks
+    fine. Selling cards shrinks a collection slowly; a bad scrape shrinks it
+    all at once, so a threshold separates the two.
+    """
+    old = None
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE) as fh:
+                old = json.load(fh)
+        except (OSError, ValueError):
+            old = None
+
+    if old:
+        drops = [
+            (k, old[k], counts[k])
+            for k in ("rows", "cards", "items")
+            if old.get(k) and counts[k] < old[k] * SHRINK_LIMIT
+        ]
+        if drops and not force:
+            print("\nExport looks incomplete - refusing to build.", file=sys.stderr)
+            for k, was, now in drops:
+                print(f"  {k}: {was} -> {now}  ({(now/was-1)*100:.0f}%)", file=sys.stderr)
+            print(
+                f"\nLast good build was {old.get('date','?')}.\n"
+                "If the scrape stopped early, re-run it and let it finish.\n"
+                "If you really did sell that much, re-run with --force.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if drops:
+            print("  ! forced past the size check")
+        for k in ("rows", "cards", "items"):
+            if old.get(k) and counts[k] != old[k]:
+                d = counts[k] - old[k]
+                print(f"  {k}: {old[k]} -> {counts[k]}  ({d:+d})")
+
+    counts["date"] = __import__("datetime").date.today().isoformat()
+    try:
+        with open(STATE_FILE, "w") as fh:
+            json.dump(counts, fh, indent=1)
+    except OSError:
+        pass
+
+
 def norm_name(v):
     """'Base Set (Unlimited)' -> 'base set';  'Scarlet & Violet' -> 'scarlet violet'."""
     t = re.sub(r"\(.*?\)", " ", str(v).lower())
@@ -564,6 +616,11 @@ def main():
         help="skip pricing entirely",
     )
     ap.add_argument(
+        "--force",
+        action="store_true",
+        help="build even if the export shrank sharply since last time",
+    )
+    ap.add_argument(
         "--refresh",
         action="store_true",
         help="ignore the cache and re-fetch everything (picks up newly added "
@@ -625,6 +682,17 @@ def main():
     for lab in empty:
         print(f"  ! {lab} has no cards filed in TCGdex yet - leaving untracked")
         del resolved[lab]
+
+    with open(args.csv, newline="", encoding="utf-8-sig") as fh:
+        all_rows = list(_csv.DictReader(fh))
+    check_size(
+        {
+            "rows": len(all_rows),
+            "cards": len({(r.get("set"), r.get("number")) for r in all_rows}),
+            "items": sum(int(r.get("qty") or 1) for r in all_rows),
+        },
+        args.force,
+    )
 
     owned, loose = read_collection(args.csv, resolved)
     print(f"\n{len(owned)} distinct cards across {len({c for c,_ in owned})} sets")

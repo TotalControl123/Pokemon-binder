@@ -34,8 +34,13 @@ Write-Host "==> building with $py" -ForegroundColor Cyan
 $out = Join-Path $Repo "index.html"
 $buildArgs = @("build_binder.py", $Csv, "-o", $out)
 if ($env:BINDER_OWNER) { $buildArgs += @("--owner", $env:BINDER_OWNER) }
+if ($env:BINDER_FORCE) { $buildArgs += "--force" }
 & $py @buildArgs
-if ($LASTEXITCODE -ne 0) { throw "build failed" }
+if ($LASTEXITCODE -ne 0) {
+    # The build refuses to run on an export that shrank sharply. Stop here so a
+    # bad scrape can never reach the live page.
+    throw "build failed - nothing published"
+}
 
 Write-Host "==> publishing" -ForegroundColor Cyan
 Push-Location $Repo

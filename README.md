@@ -10,6 +10,7 @@ build_binder.py        ->  CSV + TCGdex checklists -> a single HTML file
 binder_template.html   ->  the page itself (styles + behaviour)
 publish.sh             ->  rebuild and push to GitHub Pages (macOS/Linux)
 publish.ps1            ->  the same, for Windows PowerShell
+refresh.ps1            ->  scrape -> collect the CSV -> build -> publish, in one go
 ```
 
 ## Build locally
@@ -87,6 +88,40 @@ personal details, but it is a public inventory of what you own.
 | `--all-art` | With `--embed-art`, also inline cards you don't own |
 | `--first-ed` | Count 1st Edition as a required variant |
 | `--no-variants` | Skip per-card detail lookups; disables the split view |
+
+## The update loop
+
+After adding cards in CollectR:
+
+```powershell
+.\refresh.ps1 -Scrape
+```
+
+That copies the console scraper to your clipboard and opens your showcase
+page. Paste it into DevTools, run `await collectrExport()`, then press Enter
+back in PowerShell. It finds the new CSV in Downloads, checks it, builds and
+publishes.
+
+If you've already scraped, drop the `-Scrape` and it just picks up the newest
+export from Downloads.
+
+Set these once, ideally in your PowerShell profile:
+
+```powershell
+$env:BINDER_OWNER    = "David"
+$env:BINDER_SHOWCASE = "https://app.getcollectr.com/showcase/profile/<your-id>"
+```
+
+### The size check
+
+The build records how big your collection was in `.binder-state.json` and
+refuses to run if the next export lost more than 5% of it. The scraper's usual
+failure is a scroll that stopped early - it produces a perfectly valid CSV with
+cards missing, and a build that looks completely normal. Selling cards shrinks
+a collection gradually; a bad scrape shrinks it all at once.
+
+Nothing is published when the check fires. If you really did sell that much,
+re-run with `-Force`.
 
 ## New sets
 

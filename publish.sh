@@ -17,7 +17,8 @@ OWNER="${BINDER_OWNER:-}"
 [ -d "$REPO/.git" ] || { echo "$REPO is not a git repo - see README.md" >&2; exit 1; }
 
 echo "==> building"
-python3 build_binder.py "$CSV" -o "$REPO/index.html" ${OWNER:+--owner "$OWNER"}
+python3 build_binder.py "$CSV" -o "$REPO/index.html" ${OWNER:+--owner "$OWNER"} \
+  ${BINDER_FORCE:+--force} || { echo "build failed - nothing published" >&2; exit 1; }
 
 echo "==> publishing"
 cd "$REPO"
