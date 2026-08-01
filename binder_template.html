@@ -119,6 +119,12 @@ details.set[open] > summary .set-name{color:#fff}
 }
 .pocket.have .cap{color:var(--paper)}
 .num{font:700 10px "JetBrains Mono",monospace;color:var(--dim);display:block}
+.price{
+  display:block;margin-top:3px;
+  font:700 10px "JetBrains Mono",monospace;color:var(--foil-c);
+}
+.pocket.miss .price{color:#8d7a4e}
+.cost{color:var(--foil-c)}
 .pocket.have .num{color:var(--foil-a)}
 /* ---- paired base / reverse ---- */
 /* Strict numerical order: no dense packing, or a later single backfills an
@@ -266,19 +272,20 @@ footer a{color:var(--mute)}
       <input type="search" id="q" placeholder="Find a card or set">
       <label class="chk"><input type="checkbox" id="only"> Missing only</label>
       <label class="chk"><input type="checkbox" id="art" checked> Card art</label>
+      <label class="chk" id="price-wrap"><input type="checkbox" id="price"> Prices</label>
     </div>
   </header>
   <main id="out"></main>
   <footer>
-    Checklists from <a href="https://tcgdex.dev">TCGdex</a>. Card images load from
-    their CDN, so this page needs a connection to show them.
+    Checklists and card images from <a href="https://tcgdex.dev">TCGdex</a>.
+    <span id="price-note"></span>
   </footer>
 </div>
 
 <script>
 const DATA = /*__DATA__*/null;
 const out = document.getElementById('out');
-let mode = 'num', onlyMissing = false, query = '', showArt = true;
+let mode = 'num', onlyMissing = false, query = '', showArt = true, showPrice = false;
 const opened = new Set();   // sets the reader has expanded, kept across redraws
 const START_SPLIT = true;   // open on the paired base/reverse view
 
@@ -313,6 +320,33 @@ if (!DATA.variantData) {
 document.getElementById('sub').textContent = DATA.owner
   ? DATA.owner + " \u2014 " + DATA.sets.length + " sets tracked"
   : DATA.sets.length + " sets tracked";
+
+// Cardmarket prices the plain and foil printings separately; fall back to
+// whichever exists so a card with only one listed still shows something.
+function priceOf(c, reverse){
+  if (!c.p) return 0;
+  const [plain, foil] = c.p;
+  return (reverse ? (foil || plain) : (plain || foil)) || 0;
+}
+
+function money(set){
+  let held = 0, need = 0;
+  const add = (c, rev, has) => { const v = priceOf(c, rev); if (has) held += v; else need += v; };
+  if (mode === 'mas') {
+    const tracks = tracksFor(set);
+    if (tracks.length) {
+      for (const t of tracks)
+        for (const c of t.cards) add(c, t.key === 'rev', heldIn(c, t));
+      return {held, need};
+    }
+  }
+  for (const c of set.cards) add(c, false, c.qty > 0);
+  return {held, need};
+}
+
+const fmt = v => DATA.symbol + (v >= 100
+  ? Math.round(v).toLocaleString()
+  : v.toFixed(2));
 
 function tally(set){
   let have = 0, total = 0;
@@ -353,6 +387,15 @@ function pocket(c, held, reverse){
   cap.innerHTML = '<span class="num"></span>';
   cap.firstChild.textContent = c.n;
   cap.append(document.createTextNode(c.name || ''));
+  if (showPrice && c.p) {
+    const pr = priceOf(c, reverse);
+    if (pr) {
+      const sp = document.createElement('span');
+      sp.className = 'price';
+      sp.textContent = fmt(pr);
+      cap.append(sp);
+    }
+  }
   el.append(cap);
   return el;
 }
@@ -732,8 +775,16 @@ function render(){
       '<small>' + Math.round(t.pct*100) + '% complete</small></div>' +
       '<div class="bar"><i style="width:' + (t.pct*100).toFixed(1) + '%"></i></div></summary>';
     d.querySelector('.set-name').textContent = set.label;
-    d.querySelector('.set-meta').textContent =
-      set.tcgdex + (set.released ? '  \u00b7  ' + set.released : '');
+    const meta = d.querySelector('.set-meta');
+    meta.textContent = set.tcgdex + (set.released ? '  \u00b7  ' + set.released : '');
+    if (showPrice && DATA.currency) {
+      const m = money(set);
+      meta.append(document.createTextNode('  \u00b7  '));
+      const c = document.createElement('span');
+      c.className = 'cost';
+      c.textContent = m.need > 0 ? fmt(m.need) + ' to complete' : 'complete';
+      meta.append(c);
+    }
 
     d.addEventListener('toggle', () => {
       if (d.open) {
@@ -766,8 +817,13 @@ function render(){
 
   const all = DATA.sets.map(tally)
     .reduce((a,b) => ({have:a.have+b.have, total:a.total+b.total}), {have:0,total:0});
-  document.getElementById('eyebrow').textContent =
-    'Collection checklist \u2014 ' + all.have + ' of ' + all.total + ' held';
+  let line = 'Collection checklist \u2014 ' + all.have + ' of ' + all.total + ' held';
+  if (showPrice && DATA.currency) {
+    const m = DATA.sets.map(money)
+      .reduce((a,b) => ({held:a.held+b.held, need:a.need+b.need}), {held:0,need:0});
+    line += '  \u00b7  ' + fmt(m.held) + ' held, ' + fmt(m.need) + ' to complete';
+  }
+  document.getElementById('eyebrow').textContent = line;
 }
 
 function setMode(m){
@@ -782,12 +838,23 @@ document.getElementById('m-mas').onclick = () => setMode('mas');
 document.getElementById('m-bin').onclick = () => setMode('binder');
 document.getElementById('only').onchange = e => { onlyMissing = e.target.checked; render(); };
 document.getElementById('art').onchange = e => { showArt = e.target.checked; render(); };
+if (DATA.currency) {
+  document.getElementById('price').onchange = e => { showPrice = e.target.checked; render(); };
+} else {
+  document.getElementById('price-wrap').remove();
+}
 let timer;
 document.getElementById('q').oninput = e => {
   clearTimeout(timer);
   timer = setTimeout(() => { query = e.target.value.trim().toLowerCase(); render(); }, 160);
 };
-if (START_SPLIT && DATA.variantData) setMode('mas'); else render();
+if (START_SPLIT && DATA.variantData) setMode('mas'); else if (DATA.currency) {
+  document.getElementById('price-note').textContent =
+    'Prices are Cardmarket trend values in EUR, converted to ' + DATA.currency +
+    ' at the ECB rate of ' + DATA.fxDate + '. Indicative only, and fixed at the ' +
+    'time this page was built (' + DATA.built + ').';
+}
+render();
 </script>
 </body>
 </html>

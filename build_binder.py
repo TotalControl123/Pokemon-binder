@@ -80,10 +80,63 @@ REVERSE_RARITIES = {"Common", "Uncommon", "Rare"}
 REVERSE_ERA = "2002-05-01"
 
 
+CURRENCIES = {"GBP": "\u00a3", "EUR": "\u20ac", "USD": "$"}
+
+
+def fx_rate(to):
+    """EUR -> target rate from the ECB via Frankfurter. Cached like everything else."""
+    if to == "EUR":
+        return 1.0, "n/a"
+    d = fetch_url(f"https://api.frankfurter.dev/v1/latest?base=EUR&symbols={to}")
+    if not d or to not in (d.get("rates") or {}):
+        return None, None
+    return d["rates"][to], d.get("date", "")
+
+
+def card_price(card, rate):
+    """Cardmarket trend price for the plain and foil printings, converted.
+
+    Cardmarket is the European market, so it's the relevant one for a UK
+    collector - TCGplayer is US retail in dollars. 'trend' is Cardmarket's own
+    smoothed figure; avg30 and avg are fallbacks when it's missing.
+    """
+    cm = ((card or {}).get("pricing") or {}).get("cardmarket") or {}
+    if not cm:
+        return None
+
+    def pick(suffix):
+        for k in ("trend", "avg30", "avg"):
+            v = cm.get(k + suffix)
+            if isinstance(v, (int, float)) and v > 0:
+                return round(v * rate, 2)
+        return None
+
+    plain, foil = pick(""), pick("-holo")
+    return [plain, foil] if (plain or foil) else None
+
+
 def norm_name(v):
     """'Base Set (Unlimited)' -> 'base set';  'Scarlet & Violet' -> 'scarlet violet'."""
     t = re.sub(r"\(.*?\)", " ", str(v).lower())
     return " ".join(re.sub(r"[^a-z0-9 ]", " ", t).split())
+
+
+def fetch_url(url):
+    """Cached GET for a full URL (used for things outside the TCGdex API)."""
+    os.makedirs(CACHE, exist_ok=True)
+    key = os.path.join(CACHE, "url_" + re.sub(r"[^A-Za-z0-9._-]", "_", url) + ".json")
+    if os.path.exists(key):
+        with open(key) as fh:
+            return json.load(fh)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "binder-report/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.load(r)
+    except Exception:
+        data = None
+    with open(key, "w") as fh:
+        json.dump(data, fh)
+    return data
 
 
 def fetch(path):
@@ -321,7 +374,7 @@ def read_collection(path, resolved):
     return owned, loose
 
 
-def build_sets(owned, resolved, want_variants, keep_variants):
+def build_sets(owned, resolved, want_variants, keep_variants, rate=None):
     """Assemble per-set checklists, marking which cards and variants are owned."""
     used = sorted({c for c, _ in owned})
     out = []
@@ -334,7 +387,7 @@ def build_sets(owned, resolved, want_variants, keep_variants):
             continue
         cards = meta.get("cards") or []
 
-        variants, by_dex, rarity = {}, {}, {}
+        variants, by_dex, rarity, prices = {}, {}, {}, {}
         inferred_rev = False
         if want_variants:
             print(f"  detail: {cset} ({len(cards)} cards)", file=sys.stderr)
@@ -344,6 +397,10 @@ def build_sets(owned, resolved, want_variants, keep_variants):
                 v = (d or {}).get("variants") or {}
                 variants[c["id"]] = [k for k in keep_variants if v.get(k)]
                 rarity[c["id"]] = (d or {}).get("rarity")
+                if rate is not None:
+                    pr = card_price(d, rate)
+                    if pr:
+                        prices[c["id"]] = pr
                 # Some CollectR entries (notably Japanese sets) carry the
                 # national Pokedex number instead of the set number.
                 for dex in (d or {}).get("dexId") or []:
@@ -384,6 +441,7 @@ def build_sets(owned, resolved, want_variants, keep_variants):
                     "qty": have["qty"] if have else 0,
                     "has": dict(sorted(have["finishes"].items())) if have else {},
                     "vars": variants.get(c["id"], []),
+                    "p": prices.get(c["id"]),
                 }
             )
 
@@ -432,6 +490,17 @@ def main():
         "--no-variants",
         action="store_true",
         help="skip per-card detail lookups (faster, disables master-set mode)",
+    )
+    ap.add_argument(
+        "--currency",
+        default="GBP",
+        choices=sorted(CURRENCIES),
+        help="convert Cardmarket's EUR prices to this currency (default GBP)",
+    )
+    ap.add_argument(
+        "--no-prices",
+        action="store_true",
+        help="skip pricing entirely",
     )
     ap.add_argument(
         "--refresh",
@@ -501,7 +570,15 @@ def main():
     if loose:
         print(f"{len(loose)} rows with no checklist (sealed, promos, untracked sets)")
 
-    sets = build_sets(owned, resolved, not args.no_variants, keep)
+    rate, fx_date = (None, None)
+    if not args.no_prices and not args.no_variants:
+        rate, fx_date = fx_rate(args.currency)
+        if rate is None:
+            print(f"  ! could not get an EUR->{args.currency} rate - prices off")
+        else:
+            print(f"prices in {args.currency} at {rate:.4f}/EUR (ECB {fx_date})")
+
+    sets = build_sets(owned, resolved, not args.no_variants, keep, rate)
 
     if args.sets:
         wanted = {x.strip().lower() for x in args.sets.split(",") if x.strip()}
@@ -530,6 +607,10 @@ def main():
         "sealed": sealed,
         "orphan": orphan,
         "variantData": not args.no_variants,
+        "currency": args.currency if rate else None,
+        "symbol": CURRENCIES.get(args.currency, ""),
+        "fxDate": fx_date,
+        "built": __import__("datetime").date.today().isoformat(),
         "offlineArt": args.embed_art,
         "labels": VARIANT_LABEL,
     }
