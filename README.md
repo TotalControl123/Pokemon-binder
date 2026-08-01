@@ -11,6 +11,8 @@ binder_template.html   ->  the page itself (styles + behaviour)
 publish.sh             ->  rebuild and push to GitHub Pages (macOS/Linux)
 publish.ps1            ->  the same, for Windows PowerShell
 refresh.ps1            ->  scrape -> collect the CSV -> build -> publish, in one go
+Binder.bat             ->  double-click to open the window (no PowerShell needed)
+binder_gui.py          ->  the window itself
 ```
 
 ## Build locally
@@ -88,6 +90,22 @@ personal details, but it is a public inventory of what you own.
 | `--all-art` | With `--embed-art`, also inline cards you don't own |
 | `--first-ed` | Count 1st Edition as a required variant |
 | `--no-variants` | Skip per-card detail lookups; disables the split view |
+
+## The easy way: the window
+
+Double-click **Binder.bat**. It opens a small window with two buttons:
+
+1. **Copy scraper and open my showcase** - puts the console script on your
+   clipboard and opens your CollectR page. Paste it into DevTools (F12 ->
+   Console), press Enter, run `await collectrExport()`, wait for the download.
+2. **Update my binder and publish it** - finds the new CSV in Downloads,
+   builds the page, commits and pushes. Progress appears in the log pane.
+
+Your name, showcase link and Downloads folder are remembered in
+`binder-gui.json` (not committed). Nothing here uses PowerShell, so the
+execution-policy warnings don't apply.
+
+The scripts below do exactly the same thing if you prefer a terminal.
 
 ## The update loop
 

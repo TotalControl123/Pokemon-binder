@@ -4,6 +4,9 @@
 # TCGdex response cache: thousands of small JSON files, all re-fetchable.
 .tcgdex_cache/
 
+# Personal GUI settings (your name, your showcase link).
+binder-gui.json
+
 # OS noise
 .DS_Store
 Thumbs.db
