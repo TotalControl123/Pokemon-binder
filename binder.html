@@ -99,13 +99,16 @@ details.set[open] > summary .set-name{color:#fff}
 }
 .pocket.have img.on{opacity:1}
 .pocket.have{background:#232a3d}
-/* Held has to read as held even when no art loads. */
+/* Held has to read as held when no art loads - with art off, offline, or
+   before the image arrives, this dot is the only signal. Once the art is
+   showing it says nothing the image doesn't, so it fades out. */
 .pocket.have::before{
   content:'';position:absolute;top:6px;right:6px;z-index:3;width:9px;height:9px;
   border-radius:50%;background:var(--foil-a);
   box-shadow:0 0 0 2px rgba(10,12,20,.65);
+  transition:opacity .35s ease;
 }
-.pocket.have.art::before{opacity:.9}
+.pocket.have.art::before{opacity:0}
 .pocket.miss img.on{opacity:.17;filter:grayscale(.85) contrast(.85)}
 .pocket.miss{border-style:dashed;border-color:#333a52}
 .cap{
@@ -153,6 +156,47 @@ details.set[open] > summary .set-name{color:#fff}
   background:linear-gradient(100deg,var(--foil-a),var(--foil-b) 60%,var(--foil-c));
   border-radius:4px;padding:2px 5px;
 }
+
+/* ---- binder view ---- */
+.bctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:22px}
+.bctl select{
+  background:var(--slab);border:1px solid var(--edge);color:var(--paper);
+  border-radius:9px;padding:9px 11px;font:500 13px Inter,sans-serif;max-width:100%;
+}
+.spread{display:flex;justify-content:center;align-items:stretch;gap:0}
+.bpage{
+  background:linear-gradient(160deg,#1b2030,#151926);
+  border:1px solid var(--edge);padding:clamp(10px,2vw,18px);
+  display:grid;gap:clamp(6px,1.4vw,12px);flex:1;min-width:0;
+  align-content:start;
+}
+.bpage.p3{grid-template-columns:repeat(3,1fr)}
+.bpage.p2{grid-template-columns:repeat(2,1fr)}
+.bpage:first-child{border-radius:10px 0 0 10px}
+.bpage:last-child{border-radius:0 10px 10px 0}
+.bpage.solo{border-radius:10px}
+.rings{
+  width:22px;flex:none;background:#0e111a;border-top:1px solid var(--edge);
+  border-bottom:1px solid var(--edge);display:flex;flex-direction:column;
+  align-items:center;justify-content:space-around;padding:26px 0;
+}
+.rings i{
+  width:9px;height:9px;border-radius:50%;background:#080a11;
+  box-shadow:inset 0 1px 2px #000,0 0 0 1px #2a3145;
+}
+.slot-empty{
+  aspect-ratio:63/88;border-radius:7px;border:1px dashed #262d42;
+  background:rgba(0,0,0,.15);
+}
+.bnav{display:flex;align-items:center;gap:14px;justify-content:center;margin:20px 0 4px}
+.bnav button{
+  appearance:none;background:var(--slab);border:1px solid var(--edge);
+  color:var(--paper);border-radius:9px;padding:9px 15px;cursor:pointer;
+  font:600 13px Inter,sans-serif;
+}
+.bnav button:disabled{opacity:.3;cursor:not-allowed}
+.bnav .pageno{font:400 12px "JetBrains Mono",monospace;color:var(--mute);min-width:110px;text-align:center}
+.bempty{padding:50px 10px;text-align:center;color:var(--dim)}
 
 /* ---- sealed / untracked inventory ---- */
 .shelf{padding:6px 0 26px;display:flex;flex-direction:column;gap:2px}
@@ -217,6 +261,7 @@ footer a{color:var(--mute)}
       <div class="seg" role="group" aria-label="Completion mode">
         <button id="m-num" aria-pressed="true">By number</button>
         <button id="m-mas" aria-pressed="false">Split by finish</button>
+        <button id="m-bin" aria-pressed="false">Binder</button>
       </div>
       <input type="search" id="q" placeholder="Find a card or set">
       <label class="chk"><input type="checkbox" id="only"> Missing only</label>
@@ -533,7 +578,144 @@ function inventorySection(label, items, note){
   return d;
 }
 
+// ---- binder view -------------------------------------------------------
+// A set laid out as physical pages you flick through, rather than one long
+// grid. Two facing pages on a wide screen, one on a phone.
+const binder = { set: null, page: 0, size: 9, track: 'base' };
+
+function binderSeq(set){
+  const tracks = tracksFor(set);
+  const base = tracks.find(t => t.key === 'base');
+  const rev  = tracks.find(t => t.key === 'rev');
+  const seq = [];
+  for (const c of set.cards) {
+    if (!matches(c)) continue;
+    const inB = base && inTrack(c, base), inR = rev && inTrack(c, rev);
+    if (binder.track !== 'rev' && inB) seq.push({c, rev:false, held:heldIn(c, base)});
+    if (binder.track !== 'base' && inR) seq.push({c, rev:true,  held:heldIn(c, rev)});
+    if (!base && !rev) seq.push({c, rev:false, held:c.qty > 0});
+  }
+  return onlyMissing ? seq.filter(x => !x.held) : seq;
+}
+
+function pagesPerView(){
+  return window.matchMedia('(min-width: 900px)').matches ? 2 : 1;
+}
+
+function renderBinder(){
+  out.textContent = '';
+  if (!binder.set || !DATA.sets.some(s => s.label === binder.set)) {
+    binder.set = DATA.sets[0] && DATA.sets[0].label;
+  }
+  const set = DATA.sets.find(s => s.label === binder.set);
+  if (!set) { out.innerHTML = '<div class="bempty">No sets to show.</div>'; return; }
+
+  const ctl = document.createElement('div');
+  ctl.className = 'bctl';
+
+  const sel = document.createElement('select');
+  for (const s of DATA.sets) {
+    const t = tally(s);
+    const o = document.createElement('option');
+    o.value = s.label;
+    o.textContent = s.label + '  (' + t.have + '/' + t.total + ')';
+    if (s.label === binder.set) o.selected = true;
+    sel.append(o);
+  }
+  sel.onchange = () => { binder.set = sel.value; binder.page = 0; renderBinder(); };
+  ctl.append(sel);
+
+  const seg = (label, opts, cur, set_) => {
+    const g = document.createElement('div');
+    g.className = 'seg';
+    g.setAttribute('aria-label', label);
+    for (const [val, txt] of opts) {
+      const b = document.createElement('button');
+      b.textContent = txt;
+      b.setAttribute('aria-pressed', String(val === cur));
+      b.onclick = () => { set_(val); binder.page = 0; renderBinder(); };
+      g.append(b);
+    }
+    return g;
+  };
+  ctl.append(seg('Page size', [[9,'3\u00d73'],[4,'2\u00d72']], binder.size,
+                 v => binder.size = v));
+  const hasRev = set.cards.some(c => c.vars.includes('reverse'));
+  if (hasRev) {
+    ctl.append(seg('Which cards', [['base','Base'],['rev','Reverse'],['both','Both']],
+                   binder.track, v => binder.track = v));
+  }
+  out.append(ctl);
+
+  const seq = binderSeq(set);
+  if (!seq.length) {
+    out.append(Object.assign(document.createElement('div'),
+      {className:'bempty', textContent: onlyMissing
+        ? 'Nothing missing in this set.' : 'No cards match.'}));
+    return;
+  }
+
+  const per = pagesPerView();
+  const total = Math.ceil(seq.length / binder.size);
+  binder.page = Math.max(0, Math.min(binder.page, Math.max(0, total - per)));
+
+  const spread = document.createElement('div');
+  spread.className = 'spread';
+  for (let i = 0; i < per; i++) {
+    const idx = binder.page + i;
+    if (idx >= total) break;
+    if (i > 0) {
+      // Ring spine between the two facing pages.
+      const r = document.createElement('div');
+      r.className = 'rings';
+      for (let k = 0; k < 3; k++) r.append(document.createElement('i'));
+      spread.append(r);
+    }
+    const page = document.createElement('div');
+    page.className = 'bpage ' + (binder.size === 9 ? 'p3' : 'p2') + (per === 1 ? ' solo' : '');
+    const slice = seq.slice(idx * binder.size, (idx + 1) * binder.size);
+    for (const it of slice) page.append(pocket(it.c, it.held, it.rev));
+    // Pad the final page so the grid keeps its shape.
+    for (let k = slice.length; k < binder.size; k++) {
+      page.append(Object.assign(document.createElement('div'), {className:'slot-empty'}));
+    }
+    spread.append(page);
+  }
+  out.append(spread);
+
+  const nav = document.createElement('div');
+  nav.className = 'bnav';
+  const prev = document.createElement('button');
+  prev.textContent = '\u2190 Back';
+  prev.disabled = binder.page === 0;
+  prev.onclick = () => { binder.page -= per; renderBinder(); };
+  const next = document.createElement('button');
+  next.textContent = 'Next \u2192';
+  next.disabled = binder.page + per >= total;
+  next.onclick = () => { binder.page += per; renderBinder(); };
+  const no = document.createElement('span');
+  no.className = 'pageno';
+  no.textContent = per === 2 && binder.page + 1 < total
+    ? 'Pages ' + (binder.page+1) + '\u2013' + (binder.page+2) + ' of ' + total
+    : 'Page ' + (binder.page+1) + ' of ' + total;
+  nav.append(prev, no, next);
+  out.append(nav);
+
+  const eb = document.getElementById('eyebrow');
+  const held = seq.filter(x => x.held).length;
+  eb.textContent = set.label + ' \u2014 ' + held + ' of ' + seq.length + ' in this binder';
+}
+
+document.addEventListener('keydown', e => {
+  if (mode !== 'binder') return;
+  if (e.target.matches('input,select,textarea')) return;
+  if (e.key === 'ArrowLeft')  { binder.page = Math.max(0, binder.page - pagesPerView()); renderBinder(); }
+  if (e.key === 'ArrowRight') { binder.page += pagesPerView(); renderBinder(); }
+});
+window.addEventListener('resize', () => { if (mode === 'binder') renderBinder(); });
+
 function render(){
+  if (mode === 'binder') return renderBinder();
   out.textContent = '';
   let shown = 0;
   for (const set of DATA.sets) {
@@ -590,12 +772,14 @@ function render(){
 
 function setMode(m){
   mode = m;
-  document.getElementById('m-num').setAttribute('aria-pressed', m === 'num');
-  document.getElementById('m-mas').setAttribute('aria-pressed', m === 'mas');
+  for (const [id, key] of [['m-num','num'],['m-mas','mas'],['m-bin','binder']]) {
+    document.getElementById(id).setAttribute('aria-pressed', String(m === key));
+  }
   render();
 }
 document.getElementById('m-num').onclick = () => setMode('num');
 document.getElementById('m-mas').onclick = () => setMode('mas');
+document.getElementById('m-bin').onclick = () => setMode('binder');
 document.getElementById('only').onchange = e => { onlyMissing = e.target.checked; render(); };
 document.getElementById('art').onchange = e => { showArt = e.target.checked; render(); };
 let timer;
