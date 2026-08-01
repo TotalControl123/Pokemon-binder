@@ -292,13 +292,40 @@ def convert(amount, frm, to):
     return round(amount * r, 2) if r else None
 
 
-def build_loose(loose, sets, sizes, names, currency=None):
+def logo_index(labels, idx):
+    """CollectR set name -> set logo, for every set TCGdex knows.
+
+    Wider than the built checklists: a sealed product can come from a set you
+    own no cards of, and untracked sets still often have a logo.
+    """
+    out = {}
+    for lab in labels:
+        hit = SET_OVERRIDES.get(lab)
+        if not hit:
+            order = ("ja", "en") if re.search(r"japanese|\bjp\b", lab, re.I) else ("en", "ja")
+            found = next(
+                (idx[l].get(norm_name(lab)) for l in order if idx[l].get(norm_name(lab))),
+                None,
+            )
+            hit = (found[0], found[1]) if found else None
+        if not hit:
+            continue
+        meta = fetch(f"{hit[0]}/sets/{hit[1]}") or {}
+        if meta.get("logo"):
+            out[lab] = meta["logo"]
+    return out
+
+
+def build_loose(loose, sets, sizes, names, currency=None, logos=None):
     """Sealed product, and cards from sets with no checklist to diff against.
 
     Neither can be 'missing' from anything, so these are shown as a plain
     inventory rather than a checklist - but nothing in the CSV goes unshown.
     """
-    logos = {st["label"]: st.get("logo") for st in sets}
+    logos = dict(logos or {})
+    for st in sets:
+        if st.get("logo"):
+            logos[st["label"]] = st["logo"]
     sealed, orphan = [], []
     for r in loose:
         entry = {
@@ -624,7 +651,12 @@ def main():
             sys.exit("nothing to build - check --sets against the names above")
 
     sealed, orphan = build_loose(
-        loose, sets, set_sizes(), set_names(), args.currency if rate else None
+        loose,
+        sets,
+        set_sizes(),
+        set_names(),
+        args.currency if rate else None,
+        logo_index(labels, set_index()),
     )
     if sealed:
         print(f"{sum(e['qty'] for e in sealed)} sealed items, "
