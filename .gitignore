@@ -1,0 +1,9 @@
+# Your CollectR export carries a market value on every row - keep it local.
+*.csv
+
+# TCGdex response cache: thousands of small JSON files, all re-fetchable.
+.tcgdex_cache/
+
+# OS noise
+.DS_Store
+Thumbs.db
