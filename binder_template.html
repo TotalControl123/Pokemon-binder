@@ -162,7 +162,15 @@ details.set[open] > summary .set-name{color:#fff}
 }
 .item:last-child{border-bottom:0}
 .item-logo{width:46px;height:26px;object-fit:contain;flex:none;opacity:.85}
-.item-logo.blank{background:var(--pocket);border-radius:4px}
+.item-logo.card{
+  width:26px;height:36px;object-fit:cover;border-radius:3px;opacity:1;
+}
+.item-logo.blank{
+  background:var(--pocket);border-radius:4px;border:1px solid var(--edge);
+  display:flex;align-items:center;justify-content:center;
+  font:700 8px "JetBrains Mono",monospace;letter-spacing:.08em;color:var(--dim);
+}
+.item-found{color:var(--foil-a)}
 .item-main{flex:1;min-width:0}
 .item-name{font-size:13px;color:var(--paper)}
 .item-set{font:400 11px "JetBrains Mono",monospace;color:var(--dim);margin-top:2px}
@@ -440,6 +448,20 @@ function noteOffline(){
 
 // Sealed product and cards from sets with no checklist: inventory, not a
 // checklist, so they get a plain list and sit out of the completion maths.
+// Short tag for the placeholder tile when there's no image to show.
+function kindOf(it){
+  if (it.n) return String(it.n).split('/')[0];
+  const n = it.name.toLowerCase();
+  if (n.includes('elite trainer')) return 'ETB';
+  if (n.includes('booster box')) return 'BOX';
+  if (n.includes('booster bundle')) return 'BNDL';
+  if (n.includes('booster')) return 'PACK';
+  if (n.includes('tin')) return 'TIN';
+  if (n.includes('collection')) return 'COLL';
+  if (n.includes('deck')) return 'DECK';
+  return 'SET';
+}
+
 function shelf(items){
   const el = document.createElement('div');
   el.className = 'shelf';
@@ -448,14 +470,21 @@ function shelf(items){
     if (query && !(it.name + ' ' + it.set).toLowerCase().includes(query)) continue;
     const row = document.createElement('div');
     row.className = 'item';
-    if (it.logo && showArt) {
+    // Orphan cards carry real card art (it.img); sealed product falls back to
+    // the set logo (it.logo). Different shapes, so different classes.
+    const art = it.img ? it.img + '/low.webp' : (it.logo ? it.logo + '.png' : null);
+    if (art && showArt) {
       const img = new Image();
-      img.className = 'item-logo'; img.loading = 'lazy'; img.alt = '';
-      img.referrerPolicy = 'no-referrer'; img.src = it.logo + '.png';
+      img.className = it.img ? 'item-logo card' : 'item-logo';
+      img.loading = 'lazy'; img.alt = '';
+      img.referrerPolicy = 'no-referrer'; img.src = art;
       row.append(img);
     } else {
+      // No art upstream for most sealed product and for sets TCGdex lacks.
+      // A labelled tile beats an empty grey rectangle.
       const b = document.createElement('span');
       b.className = 'item-logo blank';
+      b.textContent = kindOf(it);
       row.append(b);
     }
     const main = document.createElement('div');
@@ -467,6 +496,12 @@ function shelf(items){
     st.textContent = it.set + (it.n ? '  \u00b7  ' + it.n : '') +
                      (it.finish ? '  \u00b7  ' + it.finish : '');
     main.append(nm, st);
+    if (it.found) {
+      const f = document.createElement('div');
+      f.className = 'item-set item-found';
+      f.textContent = 'matched to ' + it.found;
+      main.append(f);
+    }
     row.append(main);
     if (it.qty > 1) {
       const q = document.createElement('span');

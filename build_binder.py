@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -37,6 +38,7 @@ SET_OVERRIDES = {
     "Pokemon 151": ("ja", "SV2a"),
     "Neo Genesis (Japanese)": ("ja", "neo1"),
     "Neo Discovery (Japanese)": ("ja", "neo2"),
+    "VMAX Rising": ("ja", "S1a"),
 }
 
 # Sets CollectR reports that have no checklist to diff against. Sealed product
@@ -44,7 +46,6 @@ SET_OVERRIDES = {
 UNTRACKED = {
     "Miscellaneous Cards & Products",
     "McDonald's Promo (2025)",
-    "VMAX Rising",
     "First Partner Collection 2026",
     "SVG Special Deck Set ex",
 }
@@ -152,7 +153,68 @@ def embed_art(sets, only_owned=True):
     print(f"embedded {total/1048576:.1f} MB of art", file=sys.stderr)
 
 
-def build_loose(loose, sets):
+def clean_card_name(name):
+    """'Eevee (Pokemon Day 2025) (Reverse Cosmos Holo)' -> 'Eevee'."""
+    return re.sub(r"\s*[\(\[].*", "", str(name)).strip()
+
+
+def set_names():
+    """{tcgdex set id: display name}."""
+    m = {}
+    for lang in ("en", "ja"):
+        for st in fetch(f"{lang}/sets") or []:
+            m[st["id"]] = st["name"]
+    return m
+
+
+def set_sizes():
+    """{tcgdex set id: {official count, total count}} - used to disambiguate."""
+    m = {}
+    for lang in ("en", "ja"):
+        for st in fetch(f"{lang}/sets") or []:
+            cc = st.get("cardCount") or {}
+            m[st["id"]] = {cc.get("official"), cc.get("total")} - {None}
+    return m
+
+
+def find_card(name, number, sizes):
+    """Look a stray card up by name across every set.
+
+    CollectR files some cards under catch-all buckets - a Prismatic Evolutions
+    Eevee lands in 'Miscellaneous Cards & Products'. Searching by name recovers
+    the real card and its art.
+
+    Card numbers alone are far too weak to match on: 120 different cards are
+    called Pikachu, so 'number 20' hits a dozen sets. Two ways in, both of
+    which have to be unambiguous or we return nothing:
+
+      1. the name is unique across TCGdex (only one Ancient Mew exists), or
+      2. the '/131' denominator in the CollectR number matches exactly one
+         candidate set's card count.
+    """
+    hits = fetch(f"en/cards?name=eq:{urllib.parse.quote(clean_card_name(name))}")
+    if not isinstance(hits, list) or not hits:
+        return None
+
+    if len(hits) == 1:
+        return hits[0] if hits[0].get("image") else None
+
+    m = re.match(r"^\s*\d+\s*/\s*(\d+)\s*$", str(number or ""))
+    if not m:
+        return None
+    denom, want = int(m.group(1)), norm_num(number)
+
+    cand = [
+        c
+        for c in hits
+        if norm_num(c.get("localId")) == want
+        and c.get("image")
+        and denom in sizes.get(c["id"].rsplit("-", 1)[0], set())
+    ]
+    return cand[0] if len(cand) == 1 else None
+
+
+def build_loose(loose, sets, sizes, names):
     """Sealed product, and cards from sets with no checklist to diff against.
 
     Neither can be 'missing' from anything, so these are shown as a plain
@@ -170,6 +232,11 @@ def build_loose(loose, sets):
         if r["n"]:
             entry["n"] = r["n"]
             entry["finish"] = r["finish"]
+            hit = find_card(r["name"], r["n"], sizes)
+            if hit:
+                sid = hit["id"].rsplit("-", 1)[0]
+                entry["img"] = hit["image"]
+                entry["found"] = names.get(sid, sid)
             orphan.append(entry)
         else:
             sealed.append(entry)
@@ -420,6 +487,15 @@ def main():
             hint = f"   closest: {', '.join(near)}" if near else ""
             print(f"  {lab!r}{hint}")
 
+    empty = [
+        lab
+        for lab, (lang, sid) in resolved.items()
+        if not ((fetch(f"{lang}/sets/{sid}") or {}).get("cards"))
+    ]
+    for lab in empty:
+        print(f"  ! {lab} has no cards filed in TCGdex yet - leaving untracked")
+        del resolved[lab]
+
     owned, loose = read_collection(args.csv, resolved)
     print(f"\n{len(owned)} distinct cards across {len({c for c,_ in owned})} sets")
     if loose:
@@ -436,7 +512,7 @@ def main():
         if not sets:
             sys.exit("nothing to build - check --sets against the names above")
 
-    sealed, orphan = build_loose(loose, sets)
+    sealed, orphan = build_loose(loose, sets, set_sizes(), set_names())
     if sealed:
         print(f"{sum(e['qty'] for e in sealed)} sealed items, "
               f"{sum(e['qty'] for e in orphan)} cards outside a tracked set")
