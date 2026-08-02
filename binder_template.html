@@ -148,21 +148,47 @@ details.set[open] > summary .set-name{color:#fff}
 @media (max-width:420px){
   .pair{grid-column:span 2}
 }
-/* Reverse holos reuse the base art, so a foil sheen is what tells them apart. */
-.pocket.rev::after{
-  content:'';position:absolute;inset:0;z-index:1;pointer-events:none;
-  background:
-    repeating-linear-gradient(112deg,
-      rgba(255,255,255,.13) 0 2px, rgba(255,255,255,0) 2px 6px),
-    linear-gradient(112deg,
-      rgba(103,232,249,.62) 0%, rgba(167,139,250,.16) 20%,
-      rgba(252,211,77,.55) 38%, rgba(103,232,249,.14) 56%,
-      rgba(244,114,182,.55) 74%, rgba(167,139,250,.26) 100%);
-  mix-blend-mode:overlay;opacity:.9;
-  transition:filter .45s ease, opacity .45s ease;
+/* Reverse holos reuse the base art, so the foil is what tells them apart.
+   Three stacked layers: a prismatic wash that shifts with the pointer, a fine
+   linear texture like the ridges on a real reverse, and a specular highlight
+   that tracks the cursor. */
+.foil{
+  position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden;
+  background:linear-gradient(107deg,
+    hsl(188 100% 70% / .50) 0%,
+    hsl(276 95% 74% / .16) 15%,
+    hsl(44 100% 66% / .46) 30%,
+    hsl(155 95% 66% / .14) 45%,
+    hsl(330 100% 74% / .46) 60%,
+    hsl(205 100% 72% / .16) 76%,
+    hsl(50 100% 68% / .44) 100%);
+  background-size:230% 230%;
+  background-position:calc(var(--mx, 50%) * 1.1) calc(var(--my, 50%) * 1.1);
+  mix-blend-mode:color-dodge;
+  opacity:.62;
+  transition:opacity .3s ease, background-position .12s linear;
 }
-.pocket.rev.miss::after{opacity:.32}
-.pocket.rev:hover::after{filter:hue-rotate(50deg) saturate(1.3)}
+.foil::before{
+  content:'';position:absolute;inset:-30%;
+  background:repeating-linear-gradient(101deg,
+    rgba(255,255,255,.22) 0 1px,
+    rgba(255,255,255,0) 1px 4px);
+  mix-blend-mode:overlay;opacity:.7;
+}
+.foil::after{
+  content:'';position:absolute;inset:-25%;
+  background:radial-gradient(closest-side circle at var(--mx, 50%) var(--my, 50%),
+    rgba(255,255,255,.45), rgba(255,255,255,.08) 45%, rgba(255,255,255,0) 72%);
+  mix-blend-mode:screen;opacity:0;transition:opacity .35s ease;
+}
+.pocket.rev:hover .foil{opacity:.85}
+.pocket.rev:hover .foil::after{opacity:1}
+.pocket.rev.miss .foil{opacity:.24}
+.pocket.rev.miss:hover .foil{opacity:.4}
+@media (prefers-reduced-motion:reduce){
+  .foil{transition:none}
+  .foil::after{display:none}
+}
 .rev-tag{
   position:absolute;top:6px;left:6px;z-index:3;
   font:700 8px "JetBrains Mono",monospace;letter-spacing:.1em;color:#0d1018;
@@ -411,6 +437,7 @@ function pocket(c, held, reverse){
     el.append(img);
   }
   if (reverse) {
+    el.append(Object.assign(document.createElement('span'), {className:'foil'}));
     const tag = document.createElement('span');
     tag.className = 'rev-tag'; tag.textContent = 'REV';
     el.append(tag);
@@ -804,6 +831,33 @@ function renderBinder(){
   eb.textContent = set.label + ' \u2014 ' + held + ' of ' + seq.length + ' in this binder';
   writeHash();
 }
+
+// Let the foil catch the light as the pointer moves across it. One delegated
+// listener rather than one per pocket, and coalesced into an animation frame.
+(function trackFoil(){
+  let pending = null;
+  const apply = () => {
+    pending = null;
+    const {el, x, y} = last;
+    if (el) { el.style.setProperty('--mx', x + '%'); el.style.setProperty('--my', y + '%'); }
+  };
+  let last = {};
+  document.addEventListener('pointermove', e => {
+    const p = e.target.closest && e.target.closest('.pocket.rev');
+    if (!p) return;
+    const r = p.getBoundingClientRect();
+    last = {
+      el: p,
+      x: Math.round(((e.clientX - r.left) / r.width) * 100),
+      y: Math.round(((e.clientY - r.top) / r.height) * 100),
+    };
+    if (!pending) pending = requestAnimationFrame(apply);
+  }, {passive: true});
+  document.addEventListener('pointerleave', e => {
+    const p = e.target.closest && e.target.closest('.pocket.rev');
+    if (p) { p.style.removeProperty('--mx'); p.style.removeProperty('--my'); }
+  }, true);
+})();
 
 document.addEventListener('keydown', e => {
   if (mode !== 'binder') return;
